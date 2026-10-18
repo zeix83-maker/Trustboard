@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_FILE = "trust_quant_clean.db"
 SECRET_SALT = "TRUST_QUANT_MASTER_KEY_2026"
@@ -30,13 +30,15 @@ def init_db():
             last_updated TEXT
         )
     ''')
-    # 방문자 통계 테이블
+    # 실제 방문자 및 활성 세션 기록 테이블
     c.execute('''
-        CREATE TABLE IF NOT EXISTS site_stats (
-            id INTEGER PRIMARY KEY,
-            total_visitors INTEGER
+        CREATE TABLE IF NOT EXISTS visitor_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_or_session TEXT,
+            access_time TEXT
         )
     ''')
+    
     c.execute("SELECT COUNT(*) FROM quant_board")
     if c.fetchone()[0] == 0:
         quant_samples = [
@@ -48,10 +50,6 @@ def init_db():
             (nickname, badge_type, strategy_name, broker, principal, current_asset, return_rate, mdd, day_count, verified_hash, for_sale, sale_price, last_updated)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', quant_samples)
-    
-    c.execute("SELECT COUNT(*) FROM site_stats")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO site_stats (id, total_visitors) VALUES (1, 1420)")
     
     conn.commit()
     conn.close()
@@ -121,18 +119,37 @@ st.markdown("""
 
 init_db()
 
-# 방문자 수 증가 및 카운터 세팅
+# --- 실제 방문자 및 동시접속자 카운팅 로직 ---
+if "has_counted" not in st.session_state:
+    st.session_state.has_counted = True
+    session_id = str(datetime.now().timestamp())
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # 방문 기록 추가
+    c.execute("INSERT INTO visitor_logs (ip_or_session, access_time) VALUES (?, ?)", 
+              (session_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+# 실시간 동시접속자 집계 (최근 5분 이내 활동한 고유 세션 수)
 conn = sqlite3.connect(DB_FILE)
 c = conn.cursor()
-c.execute("UPDATE site_stats SET total_visitors = total_visitors + 1 WHERE id = 1")
-conn.commit()
-c.execute("SELECT total_visitors FROM site_stats WHERE id = 1")
+five_mins_ago = (datetime.now() - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+c.execute("SELECT COUNT(DISTINCT ip_or_session) FROM visitor_logs WHERE access_time >= ?", (five_mins_ago,))
+active_users = c.fetchone()[0]
+if active_users < 1: 
+    active_users = 1 # 최소 본인 포함 1명 보장
+
+# 누적 방문자 수 집계 (전체 기록된 로그 수)
+c.execute("SELECT COUNT(*) FROM visitor_logs")
 total_visitors = c.fetchone()[0]
 conn.close()
+# ---------------------------------------------
 
-# 상단 실시간 통계 배지 (방문자 & 동시접속자)
+# 상단 실시간 통계 배지 (진짜 카운팅 반영)
 col_stat1, col_stat2, col_stat3 = st.columns(3)
-col_stat1.metric("실시간 동시접속", "👥 12명 접속중")
+col_stat1.metric("실시간 동시접속", f"👥 {active_users}명 접속중")
 col_stat2.metric("누적 플랫폼 방문자", f"📈 {total_visitors:,}명")
 col_stat3.metric("API 무결성 보안", "🔒 100% 암호화")
 
@@ -202,11 +219,10 @@ with tab2:
             if st.button("에스크로 안전 결제 및 인수 신청", key=f"buy_{row['id']}"):
                 st.toast("안전결제 모듈과 연결됩니다.")
 
-# --- TAB 3: 실제 API 연동 신청 폼 (보안 안내 포함) ---
+# --- TAB 3: 실제 API 연동 신청 폼 ---
 with tab3:
     st.markdown("### Connect Trading Account")
     
-    # 보안 안심 가이드 박스
     st.markdown("""
         <div style="background: #F5F5F7; padding: 16px 20px; border-radius: 12px; border-left: 4px solid #0071E3; margin-bottom: 20px;">
             <h4 style="margin: 0 0 6px 0; color: #1D1D1F; font-size: 15px;">🛡️ 보안 안심 가이드 (필독)</h4>
