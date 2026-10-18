@@ -47,8 +47,8 @@ def init_db():
 def make_hash(key_str: str) -> str:
     return hmac.new(SECRET_SALT.encode(), key_str.encode(), hashlib.sha256).hexdigest()[:12]
 
-# 애플 스타일 미니멀 레이아웃 설정
-st.set_page_config(page_title="TrustQuant — 조작 불가 실전 퀀트 검증", page_width="wide", layout="centered")
+# 스트림릿 표준 페이지 설정 (오류 수정 완료)
+st.set_page_config(page_title="TrustQuant — 조작 불가 실전 퀀트 검증", layout="centered")
 
 # 고급스러운 커스텀 CSS 적용 (애플 스타일의 모던함, 여백, 부드러운 카드 섀도우)
 st.markdown("""
@@ -61,25 +61,12 @@ st.markdown("""
         letter-spacing: -0.02em;
         color: #1D1D1F;
     }
-    .stCard {
-        background-color: #FFFFFF;
-        padding: 24px;
-        border-radius: 16px;
-        border: 1px solid #E5E5EA;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.03);
-        margin-bottom: 16px;
-    }
-    .metric-container {
-        background-color: #F5F5F7;
-        padding: 12px 16px;
-        border-radius: 12px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
 init_db()
 
-# 헤더 섹션 (미니멀 & 프리미엄 톤)
+# 헤더 섹션
 st.markdown("<h1 style='text-align: center; color: #1D1D1F; padding-top: 20px;'>TrustQuant</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #86868B; font-size: 17px; margin-bottom: 40px;'>포토샵 수익 인증에 속지 마세요. 증권사 API로 100% 실시간 검증된 퀀트 계좌만 기록됩니다.</p>", unsafe_allow_html=True)
 
