@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import hashlib
 import hmac
+import requests
 import pandas as pd
 from datetime import datetime
 
@@ -34,7 +35,6 @@ def init_db():
         quant_samples = [
             ("AlphaQuant_KR", "🔥 실전 공식 인증", "라오어 무한매수법 v4.0 (TQQQ/SOXL)", "한국투자증권", 1000000, 1285000, 28.50, -3.2, 30, "9f8e7d6c5b4a", 1, 350000, "2026-10-18 18:00:00"),
             ("StableStrategy", "🏆 공식 파트너", "미국 대형주 변동성 돌파 봇", "키움증권", 50000000, 58200000, 16.40, -4.1, 60, "1a2b3c4d5e6f", 1, 500000, "2026-10-18 18:00:00"),
-            ("NexusAlpha", "✨ 신규 검증", "국장 반도체 수급 피봇 스위칭", "한국투자증권", 20000000, 21400000, 7.00, -1.5, 12, "7c8d9e0f1a2b", 0, 0, "2026-10-18 18:00:00"),
         ]
         c.executemany('''
             INSERT INTO quant_board 
@@ -47,30 +47,77 @@ def init_db():
 def make_hash(key_str: str) -> str:
     return hmac.new(SECRET_SALT.encode(), key_str.encode(), hashlib.sha256).hexdigest()[:12]
 
-# 스트림릿 표준 페이지 설정 (오류 수정 완료)
+def fetch_kis_real_account(app_key: str, app_secret: str, account_no: str, is_virtual: bool = True):
+    """
+    한국투자증권 Open API를 통해 실제 계좌 잔고 및 총 평가금액, 매입금액을 조회하는 통신 모듈.
+    사용자가 임의로 숫자를 조작할 수 없도록 서버가 직접 증권사 데이터를 가져옵니다.
+    """
+    try:
+        base_url = "https://openapivts.koreainvestment.com:29443" if is_virtual else "https://openapi.koreainvestment.com:9443"
+        tr_id = "VTTC8434R" if is_virtual else "TTTC8434R"
+        
+        # 1) 접근 토큰 발급
+        token_res = requests.post(
+            f"{base_url}/oauth2/tokenP",
+            json={"grant_type": "client_credentials", "appkey": app_key, "appsecret": app_secret},
+            timeout=5
+        )
+        token_res.raise_for_status()
+        access_token = token_res.json().get("access_token")
+
+        # 2) 계좌 잔고 조회 TR 호출
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {access_token}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": tr_id
+        }
+        params = {
+            "CANO": account_no[:8],
+            "ACNT_PRDT_CD": account_no[8:],
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "00",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": ""
+        }
+        res = requests.get(f"{base_url}/uapi/domestic-stock/v1/trading/inquire-balance", headers=headers, params=params, timeout=5)
+        res.raise_for_status()
+        
+        output2 = res.json().get("output2", [{}])[0]
+        total_eval_amt = float(output2.get("tot_evlu_amt", 0))      # 총 평가금액
+        total_purchase_amt = float(output2.get("pchs_amt_smtl_amt", 0)) # 매입 금액 (원금 성격)
+        
+        if total_purchase_amt <= 0:
+            total_purchase_amt = total_eval_amt # 예외 방어
+            
+        return {
+            "success": True,
+            "principal": total_purchase_amt,
+            "current_asset": total_eval_amt
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 st.set_page_config(page_title="TrustQuant — 조작 불가 실전 퀀트 검증", layout="centered")
 
-# 고급스러운 커스텀 CSS 적용 (애플 스타일의 모던함, 여백, 부드러운 카드 섀도우)
 st.markdown("""
     <style>
-    .main {
-        background-color: #FAFAFC;
-    }
-    h1, h2, h3 {
-        font-weight: 600;
-        letter-spacing: -0.02em;
-        color: #1D1D1F;
-    }
+    .main { background-color: #FAFAFC; }
+    h1, h2, h3 { font-weight: 600; letter-spacing: -0.02em; color: #1D1D1F; }
     </style>
 """, unsafe_allow_html=True)
 
 init_db()
 
-# 헤더 섹션
 st.markdown("<h1 style='text-align: center; color: #1D1D1F; padding-top: 20px;'>TrustQuant</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #86868B; font-size: 17px; margin-bottom: 40px;'>포토샵 수익 인증에 속지 마세요. 증권사 API로 100% 실시간 검증된 퀀트 계좌만 기록됩니다.</p>", unsafe_allow_html=True)
 
-# 메인 탭 네비게이션
 tab1, tab2, tab3 = st.tabs(["📊 실시간 검증 리더보드", "🛒 검증된 전략 봇 마켓", "🔒 내 계좌 API 검증 등록"])
 
 conn = sqlite3.connect(DB_FILE)
@@ -134,35 +181,48 @@ with tab2:
             if st.button("에스크로 안전 결제 및 인수 신청", key=f"buy_{row['id']}"):
                 st.toast("안전결제 모듈과 연결됩니다.")
 
-# --- TAB 3: API 연동 신청 ---
+# --- TAB 3: 실제 API 연동 신청 폼 ---
 with tab3:
     st.markdown("### Connect Trading Account")
-    st.markdown("<p style='color: #86868B; font-size: 14px;'>증권사 읽기 전용 API를 연동하여 조작 불가능한 공식 검증 뱃지를 획득하세요.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #86868B; font-size: 14px;'>한국투자증권 읽기 전용(Read-Only) API를 연동하여 실제 계좌 숫자를 투명하게 검증받으세요.</p>", unsafe_allow_html=True)
     
-    with st.form("api_form"):
-        nick = st.text_input("트레이더 닉네임", placeholder="예: AlphaTrader")
+    with st.form("real_api_form"):
+        nick = st.text_input("트레이더 닉네임", placeholder="예: DaeguQuant")
         strat = st.text_input("전략 타이틀", placeholder="예: 미국 지수 레버리지 변동성 돌파")
-        broker = st.selectbox("증권사 선택", ["한국투자증권 Open API", "키움증권 REST API"])
+        is_virtual = st.selectbox("계좌 유형", ["모의투자 계좌", "실전투자 계좌"]) == "모의투자 계좌"
         
         col_a, col_b = st.columns(2)
-        app_key = col_a.text_input("App Key (Read-Only)", type="password")
+        app_key = col_a.text_input("App Key (읽기 전용)", type="password")
         app_sec = col_b.text_input("App Secret", type="password")
-        acc_no = st.text_input("계좌번호 (10자리)", placeholder="1234567801")
+        acc_no = st.text_input("계좌번호 (앞 8자리 + 뒤 2자리)", placeholder="1234567801")
         
         st.markdown("<br>", unsafe_allow_html=True)
-        submitted = st.form_submit_button("증권사 서버 직접 연동 및 검증 시작")
+        submitted = st.form_submit_button("증권사 서버 직접 통신 및 무결성 검증 등록")
         
-        if submitted and nick and strat:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            h = make_hash(f"{nick}|{now_str}")
-            conn = sqlite3.connect(DB_FILE)
-            conn.execute('''
-                INSERT OR REPLACE INTO quant_board 
-                (nickname, badge_type, strategy_name, broker, principal, current_asset, return_rate, mdd, day_count, verified_hash, for_sale, sale_price, last_updated)
-                VALUES (?, '✨ 신규 검증', ?, ?, 10000000, 10300000, 3.0, -1.0, 1, ?, 0, 0, ?)
-            ''', (nick, strat, broker, h, now_str))
-            conn.commit()
-            conn.close()
-            st.success("실시간 무결성 검증이 완료되어 리더보드에 반영되었습니다.")
+        if submitted:
+            if not nick or not strat or not app_key or not app_sec or not acc_no:
+                st.error("모든 정보를 빠짐없이 입력해주세요.")
+            else:
+                with st.spinner("한국투자증권 서버와 통신하여 실시간 잔고를 조회하고 있습니다..."):
+                    res = fetch_kis_real_account(app_key, app_sec, acc_no, is_virtual=is_virtual)
+                    
+                    if res["success"]:
+                        principal = res["principal"]
+                        current_asset = res["current_asset"]
+                        return_rate = round(((current_asset - principal) / principal) * 100, 2) if principal > 0 else 0.0
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        h = make_hash(f"{nick}|{current_asset}|{now_str}")
+                        
+                        conn = sqlite3.connect(DB_FILE)
+                        conn.execute('''
+                            INSERT OR REPLACE INTO quant_board 
+                            (nickname, badge_type, strategy_name, broker, principal, current_asset, return_rate, mdd, day_count, verified_hash, for_sale, sale_price, last_updated)
+                            VALUES (?, '🛡️ 실전 API 검증', ?, ?, ?, ?, ?, -1.5, 1, ?, 0, 0, ?)
+                        ''', (nick, strat, "한국투자증권(모의)" if is_virtual else "한국투자증권(실전)", principal, current_asset, return_rate, h, now_str))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"🎉 연동 성공! 실시간 잔고({current_asset:,.0f}원)가 조회되어 리더보드에 안전하게 박제되었습니다.")
+                    else:
+                        st.error(f"연동 실패: 한투 API 인증 정보나 계좌번호를 다시 확인해주세요. (오류: {res.get('error')})")
 
 st.markdown("<br><hr style='border: none; border-top: 1px solid #E5E5EA;'><p style='text-align: center; color: #86868B; font-size: 12px;'>&copy; 2026 TrustQuant. Designed with Apple-grade minimalism.</p>", unsafe_allow_html=True)
