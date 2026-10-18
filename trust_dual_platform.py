@@ -69,7 +69,7 @@ def init_db():
         c.executemany('''
             INSERT INTO biz_board 
             (store_alias, category, region, data_source, monthly_revenue, monthly_net_profit, yoy_growth, verified_hash, for_sale, premium_ask, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', biz_samples)
 
     conn.commit()
